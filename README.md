@@ -34,6 +34,9 @@ to `~/.zshrc`. Optional: install fd
 (`brew install fd`, or `sudo apt install fd-find` on Debian and Raspberry Pi OS, where
 it's called `fdfind`; `o` finds it either way).
 
+Already use `o` for something else? Save the script under another name (`fo`, say);
+it doesn't care what it's called.
+
 ## Settings
 
 All optional, as environment variables:
