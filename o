@@ -1,0 +1,143 @@
+#!/bin/sh
+# o: find a file by name and open it.
+# https://github.com/rdubar/opener  (MIT)
+#
+#   o decides          one match opens it; several are listed by number to pick
+#   o review guide     every word must appear in the file name
+#   o -p notes         print the matches only (for scripts)
+#   o -a old plan      also search folders named archive or _archive
+#   o -w notes         also search git worktrees (agent copies of a repo)
+#
+# Settings (environment variables, all optional):
+#   O_ROOTS   folders to search, separated by ':'   (default: $HOME)
+#   O_OPEN    command that opens a file             (default: $VISUAL, $EDITOR,
+#             then open / xdg-open, else just print the path)
+#   O_PINS    a file; any worktree whose path appears in it is searched anyway
+#   O_MAX     how many matches to list              (default: 25)
+#
+# Uses fd (or fdfind) if installed: fast, respects .gitignore. Otherwise find.
+
+set -u
+
+usage() {
+  sed -n '4,20p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+archive=0 worktrees=0 printonly=0
+while [ $# -gt 0 ]; do
+  case $1 in
+    -a) archive=1 ;;
+    -w) worktrees=1 ;;
+    -p) printonly=1 ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    -*) echo "o: unknown option $1" >&2; usage >&2; exit 2 ;;
+    *) break ;;
+  esac
+  shift
+done
+[ $# -gt 0 ] || { usage >&2; exit 2; }
+
+roots=${O_ROOTS:-$HOME}
+max=${O_MAX:-25}
+first=$1; shift
+rest=$*
+
+fd=
+if command -v fd >/dev/null 2>&1; then fd=fd
+elif command -v fdfind >/dev/null 2>&1; then fd=fdfind   # Debian, Raspberry Pi OS
+fi
+
+skip="node_modules .git __pycache__ .venv venv .cache .Trash graphify-out"
+[ $archive -eq 1 ] || skip="$skip archive _archive"
+
+tmp=$(mktemp "${TMPDIR:-/tmp}/o.XXXXXX") || exit 1
+trap 'rm -f "$tmp" "$tmp.wt"' EXIT INT TERM
+: > "$tmp.wt"
+
+old_ifs=$IFS
+IFS=:
+for root in $roots; do
+  IFS=$old_ifs
+  [ -d "$root" ] || continue
+
+  # Search by file name (case-insensitive, fixed string).
+  if [ -n "$fd" ]; then
+    set -- ; for s in $skip; do set -- "$@" --exclude "$s"; done
+    $fd --type f --ignore-case --fixed-strings "$@" -- "$first" "$root" 2>/dev/null
+  else
+    set -- ; for s in $skip; do set -- "$@" -o -name "$s"; done; shift
+    find "$root" \( -type d \( "$@" -o -name '.?*' \) \) -prune -o \
+      -type f -iname "*$first*" -print 2>/dev/null
+  fi >> "$tmp"
+
+  # Linked git worktrees have a .git *file*; note them so they can be skipped.
+  if [ $worktrees -eq 0 ]; then
+    find "$root" -mindepth 1 -maxdepth 3 -name .git -type f 2>/dev/null |
+      while IFS= read -r g; do
+        d=${g%/.git}
+        if [ -n "${O_PINS:-}" ] && [ -f "$O_PINS" ]; then
+          tilde="~${d#"$HOME"}"
+          grep -qF -- "$d/" "$O_PINS" && continue
+          grep -qF -- "$tilde/" "$O_PINS" && continue
+        fi
+        printf '%s/\n' "$d"
+      done >> "$tmp.wt"
+  fi
+  IFS=:
+done
+IFS=$old_ifs
+
+# Every extra word must be in the file name; drop worktrees; drop duplicates.
+hits=$(awk -v words="$rest" -v wtfile="$tmp.wt" '
+  BEGIN {
+    n = split(tolower(words), w, " ")
+    while ((getline line < wtfile) > 0) wt[++m] = line
+  }
+  {
+    name = tolower($0); sub(/.*\//, "", name)
+    for (i = 1; i <= n; i++) if (index(name, w[i]) == 0) next
+    for (j = 1; j <= m; j++) if (index($0, wt[j]) == 1) next
+    if (!seen[$0]++) print
+  }' "$tmp")
+
+[ -n "$hits" ] || { echo "o: no file matches: $first $rest" >&2; exit 1; }
+
+# Newest first.
+hits=$(printf '%s\n' "$hits" | tr '\n' '\0' | xargs -0 ls -td -- 2>/dev/null)
+count=$(printf '%s\n' "$hits" | wc -l | tr -d ' ')
+
+show() { printf '%s\n' "$1" | sed "s|^$HOME|~|"; }
+
+if [ $printonly -eq 1 ]; then
+  printf '%s\n' "$hits"; exit 0
+fi
+
+open_file() {
+  if [ -n "${O_OPEN:-}" ]; then $O_OPEN "$1"
+  elif [ -n "${VISUAL:-}" ]; then $VISUAL "$1"
+  elif [ -n "${EDITOR:-}" ]; then $EDITOR "$1"
+  elif command -v open >/dev/null 2>&1 && [ "$(uname)" = Darwin ]; then open "$1"
+  elif command -v xdg-open >/dev/null 2>&1 && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then xdg-open "$1" >/dev/null 2>&1 &
+  else show "$1"
+  fi
+}
+
+if [ "$count" -eq 1 ]; then
+  show "$hits"
+  open_file "$hits"
+  exit 0
+fi
+
+printf '%s\n' "$hits" | head -n "$max" | awk -v home="$HOME" '
+  { p = $0; if (index(p, home) == 1) p = "~" substr(p, length(home) + 1); printf "%3d  %s\n", NR, p }'
+[ "$count" -gt "$max" ] && echo "  ... $((count - max)) more; add a word to narrow it"
+
+[ -t 0 ] || [ -r /dev/tty ] || exit 0
+printf 'Open which? (number, Enter to quit) '
+read -r n < /dev/tty || exit 0
+case $n in
+  ''|*[!0-9]*) exit 0 ;;
+esac
+[ "$n" -ge 1 ] && [ "$n" -le "$count" ] || exit 0
+open_file "$(printf '%s\n' "$hits" | sed -n "${n}p")"
