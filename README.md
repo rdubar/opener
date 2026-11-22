@@ -9,6 +9,7 @@ o review guide    # every word must be in the file name
 o -p notes        # print the matching paths only (also automatic in a pipe: vim "$(o -p notes | head -1)")
 o -a old plan     # also search archive folders
 o -w notes        # also search git worktrees
+o ~/dev/x/plan.md # a real path opens straight away; a wrong folder searches for the file name
 ```
 
 It uses [fd](https://github.com/sharkdp/fd) if it's installed (fast, and it skips files

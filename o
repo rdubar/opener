@@ -15,6 +15,8 @@ o: find a file by name and open it.
                      the output goes to a pipe or a file)
   o -a old plan      also search folders named archive or _archive
   o -w notes         also search git worktrees (extra copies of a repo)
+  o ~/dev/x/plan.md  a real path opens straight away; if the folder is wrong,
+                     it searches for the file name
 
 Settings (environment variables, all optional):
   O_ROOTS   folders to search, separated by ':'   (default: $HOME)
@@ -52,6 +54,36 @@ done
 
 max=${O_MAX:-25}
 case $max in ''|*[!0-9]*|0) die "O_MAX must be a positive number" ;; esac
+
+# For display only: shorten $HOME to ~ and drop terminal control characters.
+show() {
+  case $1 in
+    "$HOME"/*) printf '~%s\n' "${1#"$HOME"}" ;;
+    *) printf '%s\n' "$1" ;;
+  esac | LC_ALL=C tr -d '\001-\037\177'
+}
+
+open_file() {
+  # O_OPEN, VISUAL and EDITOR may hold a command with arguments ("code -g").
+  if [ -n "${O_OPEN:-}" ]; then set -f; $O_OPEN "$1"
+  elif [ -n "${VISUAL:-}" ]; then set -f; $VISUAL "$1"
+  elif [ -n "${EDITOR:-}" ]; then set -f; $EDITOR "$1"
+  elif [ "$(uname)" = Darwin ] && command -v open >/dev/null 2>&1; then open "$1"
+  elif [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$1" >/dev/null 2>&1 &
+  else show "$1"
+  fi
+}
+
+# Given a real path (one argument), open it: no search needed.
+if [ $# -eq 1 ] && [ -f "$1" ]; then
+  if [ $printonly -eq 1 ]; then printf '%s\n' "$1"; else show "$1"; open_file "$1"; fi
+  exit 0
+fi
+# A path that isn't there (moved, or a typo in the folder): search for its file name.
+case $1 in
+  */*) [ $# -eq 1 ] && set -- "${1##*/}" ;;
+esac
 
 query=$*
 
@@ -204,26 +236,6 @@ if [ $printonly -eq 1 ]; then
   printf '%s\n' "$hits"
   exit 0
 fi
-
-# For display only: shorten $HOME to ~ and drop terminal control characters.
-show() {
-  case $1 in
-    "$HOME"/*) printf '~%s\n' "${1#"$HOME"}" ;;
-    *) printf '%s\n' "$1" ;;
-  esac | LC_ALL=C tr -d '\001-\037\177'
-}
-
-open_file() {
-  # O_OPEN, VISUAL and EDITOR may hold a command with arguments ("code -g").
-  if [ -n "${O_OPEN:-}" ]; then set -f; $O_OPEN "$1"
-  elif [ -n "${VISUAL:-}" ]; then set -f; $VISUAL "$1"
-  elif [ -n "${EDITOR:-}" ]; then set -f; $EDITOR "$1"
-  elif [ "$(uname)" = Darwin ] && command -v open >/dev/null 2>&1; then open "$1"
-  elif [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v xdg-open >/dev/null 2>&1; then
-    xdg-open "$1" >/dev/null 2>&1 &
-  else show "$1"
-  fi
-}
 
 if [ "$count" -eq 1 ]; then
   show "$hits"
